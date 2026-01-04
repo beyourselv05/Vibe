@@ -1,0 +1,146 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>blockdoku</title>
+    <style>
+        :root { --p: #3498db; --g: #2c3e50; --dc: #f2f2f2; --blue: #2980b9; }
+        body { font-family: sans-serif; background: #f8f9fa; display: flex; flex-direction: column; align-items: center; padding: 20px; touch-action: none; }
+        #leaderboard { background: white; padding: 15px; border-radius: 8px; box-shadow: 0 4px 10px rgba(0,0,0,0.1); margin-bottom: 15px; min-width: 280px; border-top: 4px solid var(--g); }
+        #leaderboard h3 { margin: 0 0 10px 0; font-size: 20px; color: var(--g); text-align: center; border-bottom: 2px solid var(--dc); padding-bottom: 5px; font-weight: 900; letter-spacing: 1px; }
+        .rank-item { display: flex; justify-content: space-between; padding: 8px 12px; font-size: 15px; border-radius: 4px; border-bottom: 1px solid #eee; }
+        .rank-num { font-weight: bold; color: var(--blue); width: 25px; }
+        .rank-name { flex-grow: 1; }
+        .rank-score { font-weight: bold; color: var(--g); }
+        #combo-msg { color: #e67e22; font-weight: bold; font-size: 18px; height: 35px; text-align: center; margin-top: 5px; }
+        #board { display: grid; grid-template: repeat(9, 42px) / repeat(9, 42px); gap: 2px; background: var(--g); border: 4px solid var(--g); border-radius: 8px; }
+        .cell { width: 42px; height: 42px; background: #fff; transition: 0.1s; }
+        .cell.dark { background: var(--dc); }
+        .cell.filled { background: var(--p) !important; border-radius: 4px; border: 1px solid #fff3; box-sizing: border-box; }
+        #pieces-container { margin-top: 30px; display: flex; gap: 25px; height: 110px; align-items: center; }
+        .piece-group { cursor: grab; display: grid; gap: 2px; padding: 10px; }
+        .piece-group.invalid { opacity: 0.3; filter: grayscale(1); pointer-events: none; }
+        .p-cell { width: 22px; height: 22px; background: var(--p); border-radius: 3px; }
+        .dragging { opacity: 0; }
+        #restart-btn { display: none; padding: 10px 25px; cursor: pointer; background: var(--g); color: #fff; border: none; border-radius: 4px; margin-bottom: 15px; font-weight: bold; }
+    </style>
+</head>
+<body>
+    <div id="leaderboard"><h3>LEADERBOARD</h3><div id="rank-list"></div></div>
+    <div id="combo-msg"></div>
+    <button id="restart-btn" onclick="reset()">다시 ㄱㄱ</button>
+    <div id="board"></div>
+    <div id="pieces-container"></div>
+
+<script>
+    const SHAPES = [[[1,1,1,1]], [[1,1],[1,1]], [[1,1,1],[0,1,0]], [[1,0],[1,0],[1,1]], [[1,1,1],[1,0,0]], [[1]], [[1,1,1]], [[1,1]], [[1,1,0],[0,1,1]], [[1,1,1,1,1]]];
+    let score = 0, state = Array(81).fill(0), dragging = null, combo = 0;
+    const $ = id => document.getElementById(id);
+
+    function init() {
+        updateRankUI();
+        $('board').innerHTML = '';
+        state.forEach((s, i) => {
+            const el = document.createElement('div'), r = Math.floor(i/9), c = i%9;
+            el.className = `cell${(Math.floor(r/3)+Math.floor(c/3))%2==0?' dark':''}${s?' filled':''}`;
+            el.ondragover = e => { e.preventDefault(); showPreview(i); };
+            el.ondragleave = clearPreview;
+            el.ondrop = e => { clearPreview(); drop(e, i); };
+            $('board').appendChild(el);
+        });
+    }
+
+    function spawn() {
+        $('pieces-container').innerHTML = '';
+        for(let i=0; i<3; i++) {
+            const s = SHAPES[Math.floor(Math.random()*SHAPES.length)], div = document.createElement('div');
+            div.className = 'piece-group'; div.draggable = true; div.dataset.s = JSON.stringify(s);
+            div.style.gridTemplateColumns = `repeat(${s[0].length}, 22px)`;
+            div.innerHTML = s.flat().map(v => `<div class="${v?'p-cell':'empty'}"></div>`).join('');
+            div.ondragstart = e => { dragging = s; e.dataTransfer.setData('s', div.dataset.s); setTimeout(() => div.classList.add('dragging'), 0); };
+            div.ondragend = () => { div.classList.remove('dragging'); dragging = null; };
+            $('pieces-container').appendChild(div);
+        }
+        updateStatus();
+    }
+
+    const canPlace = (s, r, c) => s.every((row, dr) => row.every((v, dc) => !v || (r+dr<9 && c+dc<9 && !state[(r+dr)*9+c+dc])));
+
+    function showPreview(idx) {
+        if (!dragging) return;
+        clearPreview();
+        const r = Math.floor(idx/9), c = idx%9;
+        if (canPlace(dragging, r, c)) dragging.forEach((row, dr) => row.forEach((v, dc) => v && ($('board').children[(r+dr)*9+c+dc].style.background = 'rgba(52,152,219,0.4)')));
+    }
+
+    function clearPreview() { [...$('board').children].forEach(c => c.style.background = ''); }
+
+    function drop(e, idx) {
+        const s = JSON.parse(e.dataTransfer.getData('s')), r = Math.floor(idx/9), c = idx%9;
+        if (!canPlace(s, r, c)) return;
+        s.forEach((row, dr) => row.forEach((v, dc) => v && (state[(r+dr)*9+c+dc] = 1)));
+        document.querySelector('.dragging').remove();
+        
+        let lineCells = new Set(), boxCells = new Set();
+        for(let i=0; i<9; i++) {
+            let row = Array.from({length:9},(_,j)=>i*9+j), col = Array.from({length:9},(_,j)=>j*9+i);
+            if(row.every(k=>state[k])) row.map(k=>lineCells.add(k));
+            if(col.every(k=>state[k])) col.map(k=>lineCells.add(k));
+        }
+        for(let r=0; r<9; r+=3) for(let c=0; c<9; c+=3) {
+            let box = []; for(let i=0; i<9; i++) box.push((r+Math.floor(i/3))*9+c+i%3);
+            if(box.every(k=>state[k])) box.map(k=>boxCells.add(k));
+        }
+
+        const totalToClear = new Set([...lineCells, ...boxCells]);
+        if (totalToClear.size > 0) {
+            combo++;
+            const roundScore = (lineCells.size * 10 + boxCells.size * 20) * combo;
+            score += roundScore;
+            $('combo-msg').innerText = `Score: ${score} (+${roundScore} 🔥 x${combo})`;
+        } else { combo = 0; $('combo-msg').innerText = `Score: ${score}`; }
+
+        totalToClear.forEach(k => state[k] = 0);
+        init();
+        $('pieces-container').children.length ? updateStatus() : spawn();
+    }
+
+    function updateRankUI() {
+        let ranks = JSON.parse(localStorage.getItem('bp_ranks_v3') || "[]");
+        $('rank-list').innerHTML = ranks.slice(0,5).map((r, i) => `<div class="rank-item"><span class="rank-num">${i+1}</span><span class="rank-name">${r.n}</span><span class="rank-score">${r.s} pts</span></div>`).join('') || "<div style='text-align:center; color:#ccc; padding:10px;'>No records</div>";
+    }
+
+    function checkAndSaveScore() {
+        let ranks = JSON.parse(localStorage.getItem('bp_ranks_v3') || "[]");
+        if ((ranks.length < 5 || score > ranks[ranks.length-1].s) && score > 0) {
+            setTimeout(() => {
+                const name = prompt("레전드방송", "");
+                if (name !== null) {
+                    ranks.push({ n: (name.trim() || "Anonymous").substring(0, 10), s: score });
+                    ranks.sort((a, b) => b.s - a.s);
+                    localStorage.setItem('bp_ranks_v3', JSON.stringify(ranks.slice(0, 5)));
+                    updateRankUI();
+                }
+            }, 500);
+        }
+    }
+
+    function updateStatus() {
+        let possible = 0;
+        [...$('pieces-container').children].forEach(p => {
+            const s = JSON.parse(p.dataset.s), can = state.some((_, i) => canPlace(s, Math.floor(i/9), i%9));
+            p.classList.toggle('invalid', !can); if(can) possible++;
+        });
+        if (possible === 0 && $('pieces-container').children.length) {
+            $('restart-btn').style.display = "block";
+            $('combo-msg').innerText = `Final Score: ${score}`;
+            checkAndSaveScore();
+        }
+    }
+
+    function reset() { score = 0; combo = 0; state.fill(0); $('restart-btn').style.display = 'none'; $('combo-msg').innerText = ''; init(); spawn(); }
+    init(); spawn();
+</script>
+</body>
+</html>
